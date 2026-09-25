@@ -1,19 +1,19 @@
 @echo off
 setlocal enabledelayedexpansion
-title 24/7 Multi-Stream Live Automation - Auto Installer & Setup
-color 0B
+title 24/7 Multi-Stream Live Hub - RDP Setup & Auto-Installer
+color 0A
 
 echo ======================================================================
-echo    24/7 Multi-Stream & Multi-RDP Windows Auto-Setup (Self-Healing)
+echo       24/7 Multi-Stream Windows RDP Auto-Installer & Launcher
 echo ======================================================================
 echo.
 
 cd /d "%~dp0"
 
 :: -------------------------------------------------------------------------
-:: 1. CHECK AND AUTO-INSTALL PYTHON
+:: STEP 1: DETECT OR INSTALL PYTHON
 :: -------------------------------------------------------------------------
-echo [1/4] Checking Python installation...
+echo [1/4] Checking Python environment...
 
 set "PY_CMD="
 
@@ -27,14 +27,14 @@ if "%PY_CMD%"=="" (
     if %errorlevel% equ 0 set "PY_CMD=py"
 )
 
-:: Check common Python installation paths
+:: Check specific known directories
 if "%PY_CMD%"=="" (
     if exist "C:\Python312\python.exe" (
         set "PY_CMD=C:\Python312\python.exe"
         set "PATH=C:\Python312;C:\Python312\Scripts;!PATH!"
-    ) else if exist "C:\Program Files\Python312\python.exe" (
-        set "PY_CMD=C:\Program Files\Python312\python.exe"
-        set "PATH=C:\Program Files\Python312;C:\Program Files\Python312\Scripts;!PATH!"
+    ) else if exist "C:\Python311\python.exe" (
+        set "PY_CMD=C:\Python311\python.exe"
+        set "PATH=C:\Python311;C:\Python311\Scripts;!PATH!"
     ) else if exist "%LocalAppData%\Programs\Python\Python312\python.exe" (
         set "PY_CMD=%LocalAppData%\Programs\Python\Python312\python.exe"
         set "PATH=%LocalAppData%\Programs\Python\Python312;%LocalAppData%\Programs\Python\Python312\Scripts;!PATH!"
@@ -44,22 +44,33 @@ if "%PY_CMD%"=="" (
     )
 )
 
-:: If Python still not found, download and install official Python silently
+:: If Python is still missing, auto-download and install Python 3.12 silently
 if "%PY_CMD%"=="" (
-    echo.
-    echo [*] Python not detected! Downloading official Python 3.12 64-bit installer...
-    echo [*] Please wait a moment...
+    echo [*] Python not found on this system.
+    echo [*] Downloading Python 3.12 installer...
     
-    powershell -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $ProgressPreference = 'SilentlyContinue'; Invoke-WebRequest -Uri 'https://www.python.org/ftp/python/3.12.7/python-3.12.7-amd64.exe' -OutFile '%~dp0python_installer.exe'"
+    set "DOWNLOAD_OK=0"
     
+    :: Method 1: curl.exe (Built-in Windows 10/11/Server 2019/2022)
+    curl.exe -L -k -o "%~dp0python_installer.exe" "https://www.python.org/ftp/python/3.12.7/python-3.12.7-amd64.exe" >nul 2>&1
+    if exist "%~dp0python_installer.exe" set "DOWNLOAD_OK=1"
+    
+    :: Method 2: PowerShell WebClient fallback
+    if "!DOWNLOAD_OK!"=="0" (
+        powershell -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object System.Net.WebClient).DownloadFile('https://www.python.org/ftp/python/3.12.7/python-3.12.7-amd64.exe', '%~dp0python_installer.exe')" >nul 2>&1
+        if exist "%~dp0python_installer.exe" set "DOWNLOAD_OK=1"
+    )
+
     if exist "%~dp0python_installer.exe" (
-        echo [*] Installing Python 3.12 with pip and PATH configuration...
-        "%~dp0python_installer.exe" /quiet InstallAllUsers=0 PrependPath=1 Include_pip=1 Include_test=0 Shortcuts=0
-        timeout /t 5 /nobreak >nul
+        echo [*] Installing Python 3.12 into C:\Python312 (Please wait 30 seconds)...
+        "%~dp0python_installer.exe" /quiet InstallAllUsers=1 PrependPath=1 Include_pip=1 Include_test=0 Shortcuts=0 TargetDir="C:\Python312"
+        timeout /t 8 /nobreak >nul
         del "%~dp0python_installer.exe" >nul 2>&1
         
-        :: Re-check installation paths
-        if exist "%LocalAppData%\Programs\Python\Python312\python.exe" (
+        if exist "C:\Python312\python.exe" (
+            set "PY_CMD=C:\Python312\python.exe"
+            set "PATH=C:\Python312;C:\Python312\Scripts;!PATH!"
+        ) else if exist "%LocalAppData%\Programs\Python\Python312\python.exe" (
             set "PY_CMD=%LocalAppData%\Programs\Python\Python312\python.exe"
             set "PATH=%LocalAppData%\Programs\Python\Python312;%LocalAppData%\Programs\Python\Python312\Scripts;!PATH!"
         ) else (
@@ -70,20 +81,22 @@ if "%PY_CMD%"=="" (
 
 if "%PY_CMD%"=="" (
     color 0C
-    echo [ERROR] Automatic Python installation could not complete.
-    echo Please install Python manually from https://www.python.org/downloads/
+    echo [ERROR] Automatic Python installation failed.
+    echo Please install Python manually from: https://www.python.org/downloads/
     echo (Make sure to check "Add Python to PATH")
-    pause
-    exit /b
+    echo.
+    echo Press any key to exit...
+    pause >nul
+    exit /b 1
 )
 
-echo [OK] Using Python: %PY_CMD%
+echo [OK] Python is active: %PY_CMD%
 
 :: -------------------------------------------------------------------------
-:: 2. CHECK AND CONFIGURE FFMPEG
+:: STEP 2: DETECT OR INSTALL FFMPEG
 :: -------------------------------------------------------------------------
 echo.
-echo [2/4] Checking FFmpeg installation...
+echo [2/4] Checking FFmpeg audio/video encoder...
 
 set "FFMPEG_OK=0"
 ffmpeg -version >nul 2>&1 && set "FFMPEG_OK=1"
@@ -94,20 +107,27 @@ if exist "%~dp0ffmpeg\bin\ffmpeg.exe" (
 )
 
 if "!FFMPEG_OK!"=="0" (
-    echo [*] FFmpeg not found. Downloading standalone FFmpeg essentials build for RDP...
-    echo [*] This will take 1-2 minutes depending on your RDP internet speed...
+    echo [*] FFmpeg not detected in PATH.
+    echo [*] Downloading portable FFmpeg package (1-2 minutes)...
     
-    powershell -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $ProgressPreference = 'SilentlyContinue'; Invoke-WebRequest -Uri 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip' -OutFile '%~dp0ffmpeg.zip'"
+    set "FF_DL_OK=0"
+    curl.exe -L -k -o "%~dp0ffmpeg.zip" "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" >nul 2>&1
+    if exist "%~dp0ffmpeg.zip" set "FF_DL_OK=1"
     
+    if "!FF_DL_OK!"=="0" (
+        powershell -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object System.Net.WebClient).DownloadFile('https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip', '%~dp0ffmpeg.zip')" >nul 2>&1
+        if exist "%~dp0ffmpeg.zip" set "FF_DL_OK=1"
+    )
+
     if exist "%~dp0ffmpeg.zip" (
-        echo [*] Extracting FFmpeg package...
-        powershell -Command "Expand-Archive -Path '%~dp0ffmpeg.zip' -DestinationPath '%~dp0ffmpeg_temp' -Force"
-        powershell -Command "$dir = Get-ChildItem '%~dp0ffmpeg_temp' | Select-Object -First 1; Move-Item $dir.FullName '%~dp0ffmpeg' -Force; Remove-Item '%~dp0ffmpeg_temp', '%~dp0ffmpeg.zip' -Recurse -Force"
+        echo [*] Extracting FFmpeg binaries...
+        powershell -ExecutionPolicy Bypass -Command "Expand-Archive -Path '%~dp0ffmpeg.zip' -DestinationPath '%~dp0ffmpeg_temp' -Force"
+        powershell -ExecutionPolicy Bypass -Command "$dir = Get-ChildItem '%~dp0ffmpeg_temp' | Select-Object -First 1; Move-Item $dir.FullName '%~dp0ffmpeg' -Force; Remove-Item '%~dp0ffmpeg_temp', '%~dp0ffmpeg.zip' -Recurse -Force"
         
         if exist "%~dp0ffmpeg\bin\ffmpeg.exe" (
             set "PATH=%~dp0ffmpeg\bin;!PATH!"
             set "FFMPEG_OK=1"
-            echo [OK] FFmpeg downloaded and configured successfully!
+            echo [OK] FFmpeg configured locally in project!
         )
     )
 )
@@ -115,37 +135,35 @@ if "!FFMPEG_OK!"=="0" (
 if "!FFMPEG_OK!"=="1" (
     echo [OK] FFmpeg is ready.
 ) else (
-    echo [WARNING] FFmpeg could not be downloaded automatically.
-    echo Live streaming requires FFmpeg. Please ensure FFmpeg is in PATH if already installed.
+    echo [WARNING] FFmpeg could not be configured automatically.
 )
 
 :: -------------------------------------------------------------------------
-:: 3. CREATE DIRECTORIES
+:: STEP 3: CREATE FOLDERS AND INSTALL DEPENDENCIES
 :: -------------------------------------------------------------------------
 echo.
-echo [3/4] Preparing directories and dependencies...
+echo [3/4] Preparing directories and installing requirements...
+
 if not exist "videos" mkdir videos
 if not exist "thumbnails" mkdir thumbnails
 if not exist "logs" mkdir logs
 if not exist "logs\ffmpeg_logs" mkdir logs\ffmpeg_logs
 
-:: Create .env if not exists
 if not exist ".env" (
     if exist ".env.example" copy .env.example .env >nul
 )
 
-:: Upgrade pip and install requirements
-echo [*] Installing all required Python dependencies (python-telegram-bot, psutil, etc.)...
-"%PY_CMD%" -m pip install --upgrade pip --quiet --no-warn-script-location
+echo [*] Installing required Python packages...
+"%PY_CMD%" -m pip install --upgrade pip --quiet --no-warn-script-location >nul 2>&1
 "%PY_CMD%" -m pip install -r requirements.txt --no-warn-script-location
 
-echo [OK] All dependencies installed successfully.
+echo [OK] Dependencies ready!
 
 :: -------------------------------------------------------------------------
-:: 4. LAUNCH APPLICATION
+:: STEP 4: LAUNCH BOT AUTOMATION
 :: -------------------------------------------------------------------------
 echo.
-echo [4/4] Starting 24/7 Multi-Stream Live Hub...
+echo [4/4] Starting 24/7 Multi-Stream Live Automation Bot...
 echo ======================================================================
 echo.
 
@@ -153,6 +171,9 @@ echo.
 
 if %errorlevel% neq 0 (
     echo.
-    echo [ERROR] Application exited with an error code %errorlevel%.
-    pause
+    echo ======================================================================
+    echo [!] Bot exited with code %errorlevel%.
+    echo ======================================================================
+    echo Press any key to exit...
+    pause >nul
 )

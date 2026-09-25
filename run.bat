@@ -17,12 +17,15 @@ if "%PY_CMD%"=="" (
     py --version >nul 2>&1 && set "PY_CMD=py"
 )
 if "%PY_CMD%"=="" (
-    if exist "%LocalAppData%\Programs\Python\Python312\python.exe" (
-        set "PY_CMD=%LocalAppData%\Programs\Python\Python312\python.exe"
-        set "PATH=%LocalAppData%\Programs\Python\Python312;%LocalAppData%\Programs\Python\Python312\Scripts;!PATH!"
-    ) else if exist "C:\Python312\python.exe" (
+    if exist "C:\Python312\python.exe" (
         set "PY_CMD=C:\Python312\python.exe"
         set "PATH=C:\Python312;C:\Python312\Scripts;!PATH!"
+    ) else if exist "%LocalAppData%\Programs\Python\Python312\python.exe" (
+        set "PY_CMD=%LocalAppData%\Programs\Python\Python312\python.exe"
+        set "PATH=%LocalAppData%\Programs\Python\Python312;%LocalAppData%\Programs\Python\Python312\Scripts;!PATH!"
+    ) else if exist "C:\Python311\python.exe" (
+        set "PY_CMD=C:\Python311\python.exe"
+        set "PATH=C:\Python311;C:\Python311\Scripts;!PATH!"
     )
 )
 
@@ -59,6 +62,9 @@ echo.
 
 if %errorlevel% neq 0 (
     echo.
-    echo [ERROR] Application exited with an error.
-    pause
+    echo ======================================================================
+    echo [!] Bot exited with code %errorlevel%.
+    echo ======================================================================
+    echo Press any key to exit...
+    pause >nul
 )
