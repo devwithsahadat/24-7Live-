@@ -1,0 +1,267 @@
+import os
+import json
+from pathlib import Path
+from dotenv import load_dotenv
+
+# Base directory
+BASE_DIR = Path(__file__).resolve().parent
+
+# Paths
+VIDEOS_DIR = BASE_DIR / "videos"
+THUMBNAILS_DIR = BASE_DIR / "thumbnails"
+LOGS_DIR = BASE_DIR / "logs"
+STREAM_HISTORY_FILE = LOGS_DIR / "stream_history.json"
+FFMPEG_LOG_DIR = LOGS_DIR / "ffmpeg_logs"
+CONFIG_JSON_FILE = BASE_DIR / "settings.json"
+ENV_FILE = BASE_DIR / ".env"
+
+VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
+THUMBNAILS_DIR.mkdir(parents=True, exist_ok=True)
+LOGS_DIR.mkdir(parents=True, exist_ok=True)
+FFMPEG_LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+if ENV_FILE.exists():
+    load_dotenv(ENV_FILE, override=True)
+
+# Default Slot Template
+DEFAULT_SLOT_TEMPLATE = {
+    "name": "লাইভ স্লট",
+    "stream_key": "",
+    "title": "24/7 Live Stream",
+    "description": "Welcome to our 24/7 Live Stream!",
+    "thumbnail": "",
+    "mode": "long",
+    "video": "",
+    "video_bitrate": "3000k",
+    "audio_bitrate": "128k",
+    "fps": 30,
+    "preset": "veryfast"
+}
+
+# Default Multi-Slot Config Structure
+DEFAULT_CONFIG = {
+    "NODE_ID": "RDP-1 (Main Server)",
+    "TELEGRAM_BOT_TOKEN": "8054588099:AAGCUxAcp7SRxePW07X4_3Qx1umZgxiHYnA",
+    "TELEGRAM_ADMIN_ID": "",
+    "ACTIVE_SLOT": "slot_1",
+    "slots": {
+        "slot_1": {
+            "name": "লাইভ স্লট ১ (Main)",
+            "stream_key": "d2tx-frz8-hk92-8ape-1sw6",
+            "title": "Spider Man Gameplay Live🔴 #shortfeed #trending #spiderman #gameplay #live",
+            "description": "Spider Man Gameplay Live🔴 #shortfeed #trending #spiderman #gameplay #live",
+            "thumbnail": str(THUMBNAILS_DIR / "thumb_1789912283.jpg"),
+            "mode": "shorts",
+            "video": "videoplayback.webm",
+            "video_bitrate": "3000k",
+            "audio_bitrate": "128k",
+            "fps": 30,
+            "preset": "veryfast"
+        },
+        "slot_2": {
+            "name": "লাইভ স্লট ২ (Secondary)",
+            "stream_key": "",
+            "title": "24/7 Continuous Stream",
+            "description": "Non-stop 24/7 Live Broadcast",
+            "thumbnail": "",
+            "mode": "long",
+            "video": "",
+            "video_bitrate": "3000k",
+            "audio_bitrate": "128k",
+            "fps": 30,
+            "preset": "veryfast"
+        },
+        "slot_3": {
+            "name": "লাইভ স্লট ৩",
+            "stream_key": "",
+            "title": "24/7 Special Live",
+            "description": "Continuous Live Stream Channel",
+            "thumbnail": "",
+            "mode": "long",
+            "video": "",
+            "video_bitrate": "3000k",
+            "audio_bitrate": "128k",
+            "fps": 30,
+            "preset": "veryfast"
+        }
+    }
+}
+
+def load_settings() -> dict:
+    """Loads settings from settings.json and environment."""
+    cfg = DEFAULT_CONFIG.copy()
+    if CONFIG_JSON_FILE.exists():
+        try:
+            with open(CONFIG_JSON_FILE, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+                # If old settings format, migrate smoothly
+                if "slots" not in saved:
+                    migrated_slot_1 = DEFAULT_SLOT_TEMPLATE.copy()
+                    migrated_slot_1.update({
+                        "name": "লাইভ স্লট ১ (Main)",
+                        "stream_key": saved.get("YOUTUBE_STREAM_KEY", ""),
+                        "title": saved.get("YOUTUBE_STREAM_TITLE", "24/7 Live Stream"),
+                        "description": saved.get("YOUTUBE_STREAM_DESC", "Welcome to our 24/7 Live Stream!"),
+                        "thumbnail": saved.get("CURRENT_THUMBNAIL", ""),
+                        "video_bitrate": saved.get("VIDEO_BITRATE", "3000k"),
+                        "audio_bitrate": saved.get("AUDIO_BITRATE", "128k"),
+                        "fps": saved.get("FPS", 30),
+                        "preset": saved.get("PRESET", "veryfast")
+                    })
+                    cfg["slots"] = {"slot_1": migrated_slot_1}
+                    if "NODE_ID" in saved:
+                        cfg["NODE_ID"] = saved["NODE_ID"]
+                    if "TELEGRAM_BOT_TOKEN" in saved:
+                        cfg["TELEGRAM_BOT_TOKEN"] = saved["TELEGRAM_BOT_TOKEN"]
+                    if "TELEGRAM_ADMIN_ID" in saved:
+                        cfg["TELEGRAM_ADMIN_ID"] = saved["TELEGRAM_ADMIN_ID"]
+                else:
+                    cfg.update(saved)
+        except Exception:
+            pass
+
+    # Override token if in env
+    env_token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    if env_token:
+        cfg["TELEGRAM_BOT_TOKEN"] = env_token
+    env_admin = os.getenv("TELEGRAM_ADMIN_ID", "").strip()
+    if env_admin:
+        cfg["TELEGRAM_ADMIN_ID"] = env_admin
+    env_node = os.getenv("NODE_ID", "").strip()
+    if env_node:
+        cfg["NODE_ID"] = env_node
+
+    return cfg
+
+def save_all_settings(cfg: dict):
+    """Saves entire config dict into settings.json."""
+    with open(CONFIG_JSON_FILE, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, indent=2, ensure_ascii=False)
+
+def get_node_id() -> str:
+    cfg = load_settings()
+    return cfg.get("NODE_ID", "RDP-1 (Main Server)")
+
+def set_node_id(node_id: str):
+    cfg = load_settings()
+    cfg["NODE_ID"] = node_id.strip()
+    save_all_settings(cfg)
+
+def get_all_slots() -> dict:
+    cfg = load_settings()
+    return cfg.get("slots", {})
+
+def get_slot(slot_id: str) -> dict:
+    slots = get_all_slots()
+    if slot_id in slots:
+        return slots[slot_id]
+    # Default fallback
+    t = DEFAULT_SLOT_TEMPLATE.copy()
+    t["name"] = f"স্লট {slot_id}"
+    return t
+
+def save_slot(slot_id: str, slot_data: dict):
+    cfg = load_settings()
+    if "slots" not in cfg:
+        cfg["slots"] = {}
+    cfg["slots"][slot_id] = slot_data
+    save_all_settings(cfg)
+
+def update_slot_field(slot_id: str, field: str, value: any):
+    slot = get_slot(slot_id)
+    slot[field] = value
+    save_slot(slot_id, slot)
+
+def create_new_slot(name: str | None = None) -> str:
+    cfg = load_settings()
+    if "slots" not in cfg:
+        cfg["slots"] = {}
+    slots = cfg["slots"]
+    new_num = 1
+    while f"slot_{new_num}" in slots:
+        new_num += 1
+    new_slot_id = f"slot_{new_num}"
+    new_slot_data = DEFAULT_SLOT_TEMPLATE.copy()
+    new_slot_data["name"] = name or f"লাইভ স্লট {new_num}"
+    slots[new_slot_id] = new_slot_data
+    save_all_settings(cfg)
+    return new_slot_id
+
+def delete_slot(slot_id: str) -> bool:
+    cfg = load_settings()
+    if "slots" in cfg and slot_id in cfg["slots"]:
+        if len(cfg["slots"]) <= 1:
+            return False # Keep at least 1 slot
+        del cfg["slots"][slot_id]
+        save_all_settings(cfg)
+        return True
+    return False
+
+def get_active_slot_id() -> str:
+    cfg = load_settings()
+    active = cfg.get("ACTIVE_SLOT", "slot_1")
+    slots = get_all_slots()
+    if active not in slots and slots:
+        active = list(slots.keys())[0]
+    return active
+
+def set_active_slot_id(slot_id: str):
+    cfg = load_settings()
+    cfg["ACTIVE_SLOT"] = slot_id
+    save_all_settings(cfg)
+
+# Backward Compatibility Helpers
+def get_setting(key: str, default: str = "") -> str:
+    cfg = load_settings()
+    if key in cfg:
+        return str(cfg[key])
+    active_slot = get_slot(get_active_slot_id())
+    field_map = {
+        "YOUTUBE_STREAM_KEY": "stream_key",
+        "YOUTUBE_STREAM_TITLE": "title",
+        "YOUTUBE_STREAM_DESC": "description",
+        "CURRENT_THUMBNAIL": "thumbnail",
+        "VIDEO_BITRATE": "video_bitrate",
+        "AUDIO_BITRATE": "audio_bitrate",
+        "FPS": "fps",
+        "PRESET": "preset"
+    }
+    if key in field_map:
+        return str(active_slot.get(field_map[key], default))
+    return default
+
+def save_setting(key: str, value: str):
+    cfg = load_settings()
+    if key in ["NODE_ID", "TELEGRAM_BOT_TOKEN", "TELEGRAM_ADMIN_ID", "ACTIVE_SLOT"]:
+        cfg[key] = str(value).strip()
+        save_all_settings(cfg)
+        return
+
+    active_id = get_active_slot_id()
+    field_map = {
+        "YOUTUBE_STREAM_KEY": "stream_key",
+        "YOUTUBE_STREAM_TITLE": "title",
+        "YOUTUBE_STREAM_DESC": "description",
+        "CURRENT_THUMBNAIL": "thumbnail",
+        "VIDEO_BITRATE": "video_bitrate",
+        "AUDIO_BITRATE": "audio_bitrate",
+        "FPS": "fps",
+        "PRESET": "preset"
+    }
+    if key in field_map:
+        update_slot_field(active_id, field_map[key], str(value).strip())
+    else:
+        cfg[key] = str(value).strip()
+        save_all_settings(cfg)
+
+def update_env_variable(key: str, value: str):
+    save_setting(key, value)
+
+# Supported Extensions
+SUPPORTED_EXTENSIONS = {".mp4", ".mkv", ".mov", ".flv", ".avi", ".ts", ".webm", ".m4v"}
+SUPPORTED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
+
+# Static config exports
+YOUTUBE_RTMP_URL = "rtmp://a.rtmp.youtube.com/live2"
+TELEGRAM_BOT_TOKEN = get_setting("TELEGRAM_BOT_TOKEN", "8054588099:AAGCUxAcp7SRxePW07X4_3Qx1umZgxiHYnA")
+TELEGRAM_ADMIN_ID = get_setting("TELEGRAM_ADMIN_ID", "")

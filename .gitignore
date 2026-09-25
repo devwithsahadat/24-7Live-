@@ -1,0 +1,45 @@
+# Environment variables & secrets
+.env
+token.json
+client_secrets.json
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+
+# Logs
+logs/
+*.log
+
+# Video files (large files)
+videos/*
+!videos/.gitkeep
+*.mp4
+*.avi
+*.mkv
+*.mov
+*.flv
+*.wmv
+*.webm
+*.ts
+
+# Thumbnails (generated/uploaded)
+thumbnails/*
+!thumbnails/.gitkeep
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Virtual environment
+venv/
+env/
+.venv/
