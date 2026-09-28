@@ -106,7 +106,6 @@ if (-not $PythonExe) {
             $PythonExe = "C:\Python312\python.exe"
             $env:Path = "C:\Python312;C:\Python312\Scripts;" + $env:Path
         } else {
-            # Try user local path
             $userPy = "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe"
             if (Test-Path $userPy) {
                 $PythonExe = $userPy
@@ -182,7 +181,7 @@ if ($FFmpegOk) {
 }
 
 # -------------------------------------------------------------------------
-# STEP 3: DIRECTORIES & REQUIREMENTS
+# STEP 3: DIRECTORIES & CONFIG SYNC
 # -------------------------------------------------------------------------
 Write-Host ""
 Write-Host "[3/4] Preparing directories and dependencies..." -ForegroundColor Cyan
@@ -197,7 +196,15 @@ foreach ($d in $dirs) {
 
 $envFile = Join-Path $ScriptDir ".env"
 $envExample = Join-Path $ScriptDir ".env.example"
-if (-not (Test-Path $envFile) -and (Test-Path $envExample)) {
+
+# Auto-fix .env if placeholder exists or file missing
+if (Test-Path $envFile) {
+    $envContent = Get-Content $envFile -Raw
+    if ($envContent -match "your_telegram_bot_token_here" -and (Test-Path $envExample)) {
+        Write-Host "[*] Syncing valid credentials from .env.example..." -ForegroundColor Yellow
+        Copy-Item $envExample $envFile -Force
+    }
+} elseif (Test-Path $envExample) {
     Copy-Item $envExample $envFile -Force
 }
 

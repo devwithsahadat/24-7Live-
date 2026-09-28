@@ -13,7 +13,9 @@ from config import (
     TELEGRAM_BOT_TOKEN,
     get_node_id,
     get_all_slots,
-    save_setting
+    save_setting,
+    is_valid_token,
+    load_settings
 )
 from streamer import StreamManager
 from video_manager import list_stock_videos
@@ -43,16 +45,17 @@ def check_setup():
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
     FFMPEG_LOG_DIR.mkdir(parents=True, exist_ok=True)
 
-    token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip() or TELEGRAM_BOT_TOKEN
+    cfg = load_settings()
+    token = cfg.get("TELEGRAM_BOT_TOKEN", "").strip()
 
-    if not token:
-        print(f"\n{Fore.RED}[!] TELEGRAM_BOT_TOKEN পাওয়া যায়নি!{Style.RESET_ALL}")
+    if not is_valid_token(token):
+        print(f"\n{Fore.RED}[!] TELEGRAM_BOT_TOKEN পাওয়া যায়নি বা প্লেসহোল্ডার রয়েছে!{Style.RESET_ALL}")
         new_token = input(f"{Fore.YELLOW}দয়া করে আপনার Telegram Bot Token দিন (BotFather থেকে পাওয়া): {Style.RESET_ALL}").strip()
-        if new_token:
+        if is_valid_token(new_token):
             save_setting("TELEGRAM_BOT_TOKEN", new_token)
             print(f"{Fore.GREEN}[✓] Bot Token সেভ করা হয়েছে!{Style.RESET_ALL}")
         else:
-            print(f"{Fore.RED}[x] Bot Token ছাড়া টেলিগ্রাম বট চালু করা সম্ভব নয়।{Style.RESET_ALL}")
+            print(f"{Fore.RED}[x] সঠিক Bot Token ছাড়া টেলিগ্রাম বট চালু করা সম্ভব নয়।{Style.RESET_ALL}")
             sys.exit(1)
 
 def main():

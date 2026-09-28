@@ -1,12 +1,47 @@
 {
+  "NODE_ID": "RDP-1 (Main Server)",
   "TELEGRAM_BOT_TOKEN": "8054588099:AAGCUxAcp7SRxePW07X4_3Qx1umZgxiHYnA",
-  "TELEGRAM_ADMIN_ID": "",
-  "YOUTUBE_STREAM_KEY": "d2tx-frz8-hk92-8ape-1sw6",
-  "YOUTUBE_STREAM_TITLE": "Spider Man Gameplay Live🔴 #shortfeed #trending #spiderman #gameplay #live",
-  "YOUTUBE_STREAM_DESC": "Spider Man Gameplay Live🔴 #shortfeed #trending #spiderman #gameplay #live",
-  "CURRENT_THUMBNAIL": "E:\\Automationnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn\\24Live\\thumbnails\\thumb_1789912283.jpg",
-  "VIDEO_BITRATE": "3000k",
-  "AUDIO_BITRATE": "128k",
-  "FPS": 30,
-  "PRESET": "veryfast"
+  "TELEGRAM_ADMIN_ID": "7190342953",
+  "ACTIVE_SLOT": "slot_1",
+  "slots": {
+    "slot_1": {
+      "name": "লাইভ স্লট ১ (Main)",
+      "stream_key": "dj2s-bf51-pfd3-q21t-8tp2",
+      "title": "24/7 Live Stream",
+      "description": "Welcome to our 24/7 Live Stream!",
+      "thumbnail": "",
+      "mode": "long",
+      "video": "",
+      "video_bitrate": "3000k",
+      "audio_bitrate": "128k",
+      "fps": 30,
+      "preset": "veryfast"
+    },
+    "slot_2": {
+      "name": "লাইভ স্লট ২",
+      "stream_key": "",
+      "title": "24/7 Continuous Live",
+      "description": "Non-stop 24/7 Live Broadcast",
+      "thumbnail": "",
+      "mode": "long",
+      "video": "",
+      "video_bitrate": "3000k",
+      "audio_bitrate": "128k",
+      "fps": 30,
+      "preset": "veryfast"
+    },
+    "slot_3": {
+      "name": "লাইভ স্লট ৩",
+      "stream_key": "",
+      "title": "24/7 Special Stream",
+      "description": "Continuous Live Stream Channel",
+      "thumbnail": "",
+      "mode": "long",
+      "video": "",
+      "video_bitrate": "3000k",
+      "audio_bitrate": "128k",
+      "fps": 30,
+      "preset": "veryfast"
+    }
+  }
 }
