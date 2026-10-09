@@ -905,6 +905,12 @@ async def handle_video_upload(update: Update, context: ContextTypes.DEFAULT_TYPE
         elif ext in SUPPORTED_IMAGE_EXTENSIONS:
             await handle_photo_upload(update, context)
             return
+        elif message.document.file_name and "cookies" in message.document.file_name.lower():
+            file_obj = await message.document.get_file()
+            cookies_dest = config.BASE_DIR / "cookies.txt"
+            await file_obj.download_to_drive(str(cookies_dest))
+            await message.reply_text("✅ **cookies.txt সফলভাবে সংরক্ষিত হয়েছে!**\nএখন ইউটিউব ডাউনলোড সর্বোচ্চ গতি ও স্থিতিশীলতায় কাজ করবে।", parse_mode="Markdown")
+            return
         else:
             await message.reply_text(f"❌ সমর্থিত নয় এমন ফাইল ফরম্যাট।")
             return

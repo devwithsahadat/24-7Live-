@@ -35,12 +35,15 @@ def is_video_url(text: str) -> bool:
     return extract_url(text) is not None
 
 def sanitize_filename(name: str) -> str:
-    """Removes invalid filesystem characters."""
-    return re.sub(r'[\\/*?:"<>|]', "", name).strip()
+    """Removes invalid filesystem and unicode control characters."""
+    clean = re.sub(r'[\u200e\u200f\u202a-\u202e]', '', name)
+    return re.sub(r'[\\/*?:"<>|]', "", clean).strip()
 
 def download_video_from_url(url: str, progress_callback=None) -> tuple[bool, dict]:
     """
-    Downloads video using yt-dlp, merges best video + best audio to MP4.
+    Downloads video using yt-dlp with multi-client fallback (android, ios, web_embedded, mweb)
+    to bypass YouTube's 'Sign in to confirm you're not a bot' restriction.
+    Merges best video + best audio to MP4.
     Returns: (success: bool, info_dict: dict)
     """
     VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
@@ -62,18 +65,32 @@ def download_video_from_url(url: str, progress_callback=None) -> tuple[bool, dic
                 pass
 
     ydl_opts = {
-        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best',
+        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best',
         'outtmpl': str(VIDEOS_DIR / '%(title).60s [%(id)s].%(ext)s'),
         'merge_output_format': 'mp4',
         'noplaylist': True,
         'quiet': True,
         'no_warnings': True,
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android', 'ios', 'web_embedded', 'mweb']
+            }
+        },
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+            'Accept-Language': 'en-US,en;q=0.9',
+        },
         'progress_hooks': [internal_progress_hook],
         'postprocessors': [{
             'key': 'FFmpegVideoConvertor',
             'preferedformat': 'mp4',
         }],
     }
+
+    # Add cookies if cookies.txt exists in root directory
+    cookies_file = BASE_DIR / "cookies.txt"
+    if cookies_file.exists():
+        ydl_opts['cookiefile'] = str(cookies_file)
 
     if ffmpeg_loc:
         ydl_opts['ffmpeg_location'] = ffmpeg_loc
@@ -84,7 +101,8 @@ def download_video_from_url(url: str, progress_callback=None) -> tuple[bool, dic
             if not meta:
                 return False, {"error": "ভিডিও মেটাডেটা পাওয়া যায়নি। লিঙ্কটি সঠিক কিনা যাচাই করুন।"}
 
-            title = meta.get('title', 'Downloaded_Video')
+            raw_title = meta.get('title', 'Downloaded_Video')
+            clean_title = sanitize_filename(raw_title)
             video_id = meta.get('id', 'unknown')
             duration_sec = meta.get('duration', 0)
             
@@ -117,7 +135,7 @@ def download_video_from_url(url: str, progress_callback=None) -> tuple[bool, dic
             file_size_str = format_size(final_path.stat().st_size)
 
             return True, {
-                "title": title,
+                "title": clean_title,
                 "file_name": final_path.name,
                 "file_path": str(final_path),
                 "duration_str": dur_str,
@@ -128,7 +146,9 @@ def download_video_from_url(url: str, progress_callback=None) -> tuple[bool, dic
 
     except yt_dlp.utils.DownloadError as e:
         err_msg = str(e)
-        if "Private video" in err_msg:
+        if "Sign in to confirm you’re not a bot" in err_msg or "Sign in to confirm you're not a bot" in err_msg:
+            return False, {"error": "ইউটিউব বট ভেরিফিকেশন চেয়েছে। তবে মোবাইল ক্লায়েন্ট ফলব্যাক চালু করা হয়েছে, পুনরায় লিঙ্ক পাঠিয়ে চেষ্টা করুন বা cookies.txt আপলোড করুন।"}
+        elif "Private video" in err_msg:
             return False, {"error": "এই ভিডিওটি প্রাইভেট (Private) হওয়ায় ডাউনলোড করা যাচ্ছে না।"}
         elif "Video unavailable" in err_msg:
             return False, {"error": "ভিডিওটি অনুপলব্ধ (Unavailable) বা মুছে ফেলা হয়েছে।"}
