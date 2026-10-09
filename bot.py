@@ -53,6 +53,11 @@ from youtube_api import (
     update_live_broadcast_metadata,
     update_live_broadcast_thumbnail
 )
+from yt_downloader import (
+    is_video_url,
+    extract_url,
+    download_video_from_url
+)
 
 # Setup Logger
 logging.basicConfig(
@@ -101,6 +106,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🔴 **চলমান লাইভ:** `{active_count}`টি / মোট `{total_slots}`টি স্লট\n"
         f"💻 **সার্ভার লোড:** CPU: `{all_status['cpu']}` | RAM: `{all_status['ram']}`\n\n"
         "✨ **মূল ফিচারসমূহ:**\n"
+        "• 📥 **yt-dlp অটো-ডাউনলোড:** চ্যাটে সরাসরি যেকোনো ইউটিউব/ভিডিও লিংক পেস্ট করলেই অটো-ডাউনলোড হবে!\n"
         "• 🎛️ **একই RDP-তে একাধিক লাইভ:** আলাদা স্লটে একসঙ্গে ৩-৪টি লাইভ চালাতে পারবেন।\n"
         "• 🌐 **মাল্টি-RDP সাপোর্ট:** একাধিক RDP সার্ভার এই বট থেকেই পরিচালিত হবে।\n"
         "• 📝 **টাইটেল ও থাম্বনেইল:** প্রতি স্লটের জন্য আলাদা ইউটিউব টাইটেল ও থাম্বনেইল।\n"
@@ -172,7 +178,6 @@ async def send_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE, is_
 async def show_slot_manager(update: Update, context: ContextTypes.DEFAULT_TYPE, is_callback: bool = False):
     """Displays interactive slots management menu."""
     slots = get_all_slots()
-    active_slot_id = get_active_slot_id()
     node_name = get_node_id()
 
     text = (
@@ -310,7 +315,8 @@ async def show_video_selection_for_slot(update: Update, context: ContextTypes.DE
     if not videos:
         text = (
             "📁 **ভিডিও স্টক খালি!**\n\n"
-            "বর্তমানে কোনো ভিডিও নেই। চ্যাটে সরাসরি যেকোনো ভিডিও সেন্ড করুন অথবা কম্পিউটারের `videos/` ফোল্ডারে রাখুন।"
+            "বর্তমানে কোনো ভিডিও নেই।\n"
+            "👉 আপনি চ্যাটে সরাসরি যেকোনো **ইউটিউব লিংক পেস্ট** করতে পারেন (yt-dlp দিয়ে অটো ডাউনলোড হবে) অথবা ভিডিও ফাইল সেন্ড করতে পারেন।"
         )
         keyboard = [[InlineKeyboardButton("🔙 ফিরে যান", callback_data="back_to_dashboard")]]
         if is_callback and update.callback_query:
@@ -341,8 +347,10 @@ async def show_stock_videos(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     if not videos:
         text = (
             "📁 **ভিডিও স্টক খালি!**\n\n"
-            "বর্তমানে `videos/` ফোল্ডারে কোনো ভিডিও নেই।\n"
-            "👉 আপনি টেলিগ্রামে সরাসরি কোনো ভিডিও পাঠালে তা স্বয়ংক্রিয়ভাবে স্টকে সেভ হবে।"
+            "বর্তমানে `videos/` ফোল্ডারে কোনো ভিডিও নেই।\n\n"
+            "👉 **ভিডিও যুক্ত করার উপায়:**\n"
+            "১. চ্যাটে সরাসরি যেকোনো **YouTube বা ভিডিও লিংক পেস্ট করুন** (yt-dlp দিয়ে অটো ডাউনলোড হবে)।\n"
+            "২. অথবা সরাসরি ভিডিও ফাইল এই চ্যাটে সেন্ড করুন।"
         )
         keyboard = [[InlineKeyboardButton("🔙 ফিরে যান", callback_data="back_to_dashboard")]]
         if is_callback and update.callback_query:
@@ -424,6 +432,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "select_live_slot_menu":
         await show_start_live_slot_selection(update, context, is_callback=True)
 
+    elif data == "list_stock_action":
+        await show_stock_videos(update, context, is_callback=True)
+
+    elif data == "show_thumb_gallery":
+        await show_thumbnail_gallery(update, context, is_callback=True)
+
     elif data == "create_slot_action":
         new_slot_id = create_new_slot()
         new_slot = get_slot(new_slot_id)
@@ -486,7 +500,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         success, msg = stream_manager.start_stream(video["path"], mode=mode, stream_key=stream_key, slot_id=slot_id)
 
         if success:
-            # Try updating YouTube API metadata if configured
             api_note = ""
             if is_youtube_api_authenticated():
                 title = slot.get("title", "")
@@ -629,13 +642,56 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="Markdown"
             )
 
+async def handle_url_download(update: Update, url: str):
+    """Downloads video via yt-dlp asynchronously and offers instant live stream action."""
+    progress_msg = await update.message.reply_text(
+        f"📥 **ভিডিও লিংক শনাক্ত হয়েছে!**\n"
+        f"🔗 `{url}`\n\n"
+        f"⏳ **yt-dlp দিয়ে সর্বোচ্চ কোয়ালিটিতে ভিডিও ডাউনলোড শুরু হচ্ছে...**\n"
+        f"_(ভিডিও সাইজের ওপর নির্ভর করে ২০-৬০ সেকেন্ড সময় লাগতে পারে)_",
+        parse_mode="Markdown"
+    )
+
+    loop = asyncio.get_running_loop()
+    success, res = await loop.run_in_executor(None, download_video_from_url, url)
+
+    if success:
+        file_name = res["file_name"]
+        keyboard = [
+            [InlineKeyboardButton("🚀 সরাসরি লাইভে চালান", callback_data="select_live_slot_menu")],
+            [InlineKeyboardButton("📁 ভিডিও স্টক দেখুন", callback_data="list_stock_action")],
+            [InlineKeyboardButton("📊 লাইভ ড্যাশবোর্ড", callback_data="refresh_dashboard")]
+        ]
+        await progress_msg.edit_text(
+            f"✅ **ভিডিও সফলভাবে ডাউনলোড ও সেভ হয়েছে!**\n\n"
+            f"🎬 **টাইটেল:** `{res['title']}`\n"
+            f"📂 **ফাইল:** `{file_name}`\n"
+            f"⏳ **দৈর্ঘ্য:** `{res['duration_str']}` | 📦 **সাইজ:** `{res['size_str']}`\n\n"
+            "👉 এখন আপনি যেকোনো স্লটে এই ভিডিওটি ২৪/৭ লাইভ চালাতে পারেন।",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="Markdown"
+        )
+    else:
+        await progress_msg.edit_text(
+            f"❌ **ভিডিও ডাউনলোড ব্যর্থ হয়েছে!**\n\n"
+            f"কারণ: {res.get('error', 'অজানা ত্রুটি')}\n\n"
+            f"💡 লিংকটি সঠিক ও ভিডিওটি পাবলিক কিনা চেক করুন।",
+            parse_mode="Markdown"
+        )
+
 async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles text messages and user input states."""
+    """Handles text messages, interactive settings, and auto URL download."""
     text = update.message.text.strip()
     user = update.effective_user
 
     if not is_admin(user.id):
         await update.message.reply_text("⛔ আপনি অনুমোদিত নন।")
+        return
+
+    # Check if user sent a video URL (YouTube, Shorts, etc.)
+    if is_video_url(text) and not context.user_data.get("waiting_for"):
+        url = extract_url(text)
+        await handle_url_download(update, url)
         return
 
     waiting_state = context.user_data.get("waiting_for")
@@ -670,7 +726,6 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
             update_slot_field(slot_id, "title", text)
             slot = get_slot(slot_id)
             
-            # Update YouTube API if active
             api_res = ""
             if is_youtube_api_authenticated():
                 ok, msg = update_live_broadcast_metadata(text, slot.get("description", ""))
@@ -757,6 +812,23 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
                 f"   └ ⏳ সময়কাল: `{h.get('duration')}` | 📅 `{h.get('start_time')}`\n\n"
             )
         await update.message.reply_text(msg, parse_mode="Markdown")
+
+async def download_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Command /download <url> handler."""
+    user = update.effective_user
+    if not is_admin(user.id):
+        return
+
+    if not context.args:
+        await update.message.reply_text(
+            "❌ অনুগ্রহ করে ভিডিও লিংক দিন।\n"
+            "উদাহরণ: `/download https://www.youtube.com/watch?v=...`",
+            parse_mode="Markdown"
+        )
+        return
+
+    url = context.args[0].strip()
+    await handle_url_download(update, url)
 
 async def handle_photo_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles image/thumbnail uploads sent via Telegram."""
@@ -877,10 +949,11 @@ def setup_telegram_bot() -> Application:
     app.add_handler(CommandHandler("menu", start_command))
     app.add_handler(CommandHandler("dashboard", send_dashboard))
     app.add_handler(CommandHandler("slots", show_slot_manager))
+    app.add_handler(CommandHandler("download", download_command))
 
     app.add_handler(CallbackQueryHandler(handle_callback))
 
-    # Media Handlers
+    # Media & Message Handlers
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo_upload))
     app.add_handler(MessageHandler(filters.VIDEO | filters.Document.ALL, handle_video_upload))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_messages))
