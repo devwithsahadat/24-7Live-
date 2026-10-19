@@ -9,12 +9,15 @@ from datetime import datetime
 
 from config import (
     YOUTUBE_RTMP_URL,
+    VIDEOS_DIR,
     FFMPEG_LOG_DIR,
     STREAM_HISTORY_FILE,
     get_slot,
     get_all_slots,
     get_node_id
 )
+
+PLAYLIST_LOOP_ALL = "PLAYLIST_LOOP_ALL"
 
 def has_audio_stream(file_path: str) -> bool:
     """Checks if the video file contains an audio stream."""
@@ -35,6 +38,33 @@ def has_audio_stream(file_path: str) -> bool:
         pass
     return False
 
+def create_playlist_file(slot_id: str, custom_videos: list[str] | None = None) -> tuple[str, int]:
+    """
+    Creates an FFmpeg concat playlist file containing all .mp4 videos in VIDEOS_DIR (or custom list).
+    Returns: (playlist_file_path: str, count: int)
+    """
+    FFMPEG_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    playlist_path = FFMPEG_LOG_DIR / f"playlist_{slot_id}.txt"
+
+    if custom_videos:
+        video_paths = [Path(p) for p in custom_videos if Path(p).exists()]
+    else:
+        video_paths = [
+            f for f in sorted(VIDEOS_DIR.iterdir(), key=lambda x: x.name.lower())
+            if f.is_file() and f.suffix.lower() == ".mp4"
+        ]
+
+    if not video_paths:
+        return "", 0
+
+    lines = []
+    for vp in video_paths:
+        escaped = vp.resolve().as_posix().replace("'", "'\\''")
+        lines.append(f"file '{escaped}'\n")
+
+    playlist_path.write_text("".join(lines), encoding="utf-8")
+    return str(playlist_path), len(video_paths)
+
 class StreamSlotRunner:
     """Manages an individual stream process in a specific slot."""
     def __init__(self, slot_id: str):
@@ -43,13 +73,14 @@ class StreamSlotRunner:
         self.is_running = False
         self.current_video: str | None = None
         self.current_mode: str = "long"
+        self.is_playlist: bool = False
         self.start_time: datetime | None = None
         self.watchdog_thread: threading.Thread | None = None
         self.stop_requested = False
         self.restart_count = 0
         self.lock = threading.Lock()
 
-    def _build_ffmpeg_command(self, video_path: str, mode: str, stream_key: str) -> list[str]:
+    def _build_ffmpeg_command(self, source_path: str, mode: str, stream_key: str, is_playlist: bool = False) -> list[str]:
         rtmp_dest = f"{YOUTUBE_RTMP_URL}/{stream_key}"
         slot_cfg = get_slot(self.slot_id)
         video_bitrate = slot_cfg.get("video_bitrate", "3000k")
@@ -62,13 +93,42 @@ class StreamSlotRunner:
         else:
             video_filter = "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1"
 
-        has_audio = has_audio_stream(video_path)
+        if is_playlist:
+            # Multi-video playlist concat loop
+            cmd = [
+                "ffmpeg",
+                "-re",
+                "-f", "concat",
+                "-safe", "0",
+                "-stream_loop", "-1",
+                "-i", str(source_path),
+                "-vf", video_filter,
+                "-c:v", "libx264",
+                "-preset", preset,
+                "-b:v", video_bitrate,
+                "-maxrate", video_bitrate,
+                "-bufsize", "6000k",
+                "-pix_fmt", "yuv420p",
+                "-r", str(fps),
+                "-g", str(fps * 2),
+                "-c:a", "aac",
+                "-b:a", audio_bitrate,
+                "-ar", "44100",
+                "-ac", "2",
+                "-flvflags", "no_duration_filesize",
+                "-f", "flv",
+                rtmp_dest
+            ]
+            return cmd
+
+        # Single video loop mode
+        has_audio = has_audio_stream(source_path)
 
         cmd = [
             "ffmpeg",
             "-re",
             "-stream_loop", "-1",
-            "-i", str(video_path)
+            "-i", str(source_path)
         ]
 
         if not has_audio:
@@ -112,7 +172,7 @@ class StreamSlotRunner:
 
         return cmd
 
-    def _watchdog(self, video_path: str, mode: str, stream_key: str):
+    def _watchdog(self, source_path: str, mode: str, stream_key: str, is_playlist: bool = False):
         log_file_path = FFMPEG_LOG_DIR / f"{self.slot_id}.log"
         while not self.stop_requested and self.is_running:
             if self.process is not None:
@@ -123,8 +183,15 @@ class StreamSlotRunner:
                         time.sleep(5)
                         if not self.stop_requested:
                             try:
+                                actual_source = source_path
+                                if is_playlist:
+                                    # Refresh playlist to include any newly downloaded videos
+                                    refreshed_pl, pl_count = create_playlist_file(self.slot_id)
+                                    if refreshed_pl and pl_count > 0:
+                                        actual_source = refreshed_pl
+
                                 log_file = open(log_file_path, "a", encoding="utf-8", errors="ignore")
-                                cmd = self._build_ffmpeg_command(video_path, mode, stream_key)
+                                cmd = self._build_ffmpeg_command(actual_source, mode, stream_key, is_playlist=is_playlist)
                                 self.process = subprocess.Popen(
                                     cmd,
                                     stdout=log_file,
@@ -140,25 +207,37 @@ class StreamSlotRunner:
             if self.is_running:
                 return False, f"স্লট ({self.slot_id}) ইতিমধ্যে লাইভে চলছে!"
 
-            target_path = Path(video_path)
-            if not target_path.exists():
-                return False, f"ভিডিও ফাইলটি পাওয়া যায়নি: {target_path.name}"
-
             if not stream_key:
                 return False, "ইউটিউব স্ট্রিম কি সেট করা নেই!"
 
+            is_playlist = (video_path == PLAYLIST_LOOP_ALL or video_path.lower().endswith(".txt"))
+            actual_source = video_path
+
+            if is_playlist:
+                playlist_file, count = create_playlist_file(self.slot_id)
+                if count == 0:
+                    return False, "ভিডিও ফোল্ডারে কোনো .mp4 ভিডিও পাওয়া যায়নি! দয়া করে ড্রাইভ বা টেলিগ্রাম থেকে ভিডিও যোগ করুন।"
+                actual_source = playlist_file
+                self.current_video = f"🔄 সকল ভিডিও লুপ ({count}টি mp4 ফাইল)"
+            else:
+                target_path = Path(video_path)
+                if not target_path.exists():
+                    return False, f"ভিডিও ফাইলটি পাওয়া যায়নি: {target_path.name}"
+                self.current_video = target_path.name
+                actual_source = str(target_path)
+
             self.stop_requested = False
             self.restart_count = 0
-            self.current_video = target_path.name
             self.current_mode = mode
+            self.is_playlist = is_playlist
             self.start_time = datetime.now()
 
-            cmd = self._build_ffmpeg_command(str(target_path), mode, stream_key)
+            cmd = self._build_ffmpeg_command(actual_source, mode, stream_key, is_playlist=is_playlist)
             log_file_path = FFMPEG_LOG_DIR / f"{self.slot_id}.log"
 
             try:
                 log_file = open(log_file_path, "w", encoding="utf-8", errors="ignore")
-                log_file.write(f"[{datetime.now()}] Starting Slot: {self.slot_id}\nCommand: {' '.join(cmd)}\n\n")
+                log_file.write(f"[{datetime.now()}] Starting Slot: {self.slot_id} (Playlist={is_playlist})\nCommand: {' '.join(cmd)}\n\n")
                 log_file.flush()
 
                 self.process = subprocess.Popen(
@@ -171,7 +250,7 @@ class StreamSlotRunner:
 
                 self.watchdog_thread = threading.Thread(
                     target=self._watchdog,
-                    args=(str(target_path), mode, stream_key),
+                    args=(actual_source, mode, stream_key, is_playlist),
                     daemon=True
                 )
                 self.watchdog_thread.start()

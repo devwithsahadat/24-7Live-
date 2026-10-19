@@ -39,7 +39,7 @@ from config import (
     get_setting,
     save_setting
 )
-from streamer import StreamManager
+from streamer import StreamManager, PLAYLIST_LOOP_ALL
 from video_manager import (
     list_stock_videos,
     get_video_by_index,
@@ -57,6 +57,11 @@ from yt_downloader import (
     is_video_url,
     extract_url,
     download_video_from_url
+)
+from drive_downloader import (
+    is_drive_url,
+    extract_drive_url,
+    download_from_google_drive
 )
 
 # Setup Logger
@@ -79,9 +84,9 @@ def get_main_keyboard():
     """Persistent bottom reply keyboard."""
     keyboard = [
         [KeyboardButton("📊 মাল্টি-লাইভ ড্যাশবোর্ড"), KeyboardButton("🚀 লাইভ শুরু করুন")],
-        [KeyboardButton("🎛️ স্লট ম্যানেজার"), KeyboardButton("📁 ভিডিও স্টক")],
-        [KeyboardButton("⚙️ ইউটিউব ও স্লট সেটআপ"), KeyboardButton("⏹️ লাইভ বন্ধ করুন")],
-        [KeyboardButton("🖼️ থাম্বনেইল গ্যালারি"), KeyboardButton("📜 হিস্ট্রি")]
+        [KeyboardButton("🚗 ড্রাইভ থেকে ডাউনলোড"), KeyboardButton("📁 ভিডিও স্টক")],
+        [KeyboardButton("🎛️ স্লট ম্যানেজার"), KeyboardButton("⚙️ ইউটিউব ও স্লট সেটআপ")],
+        [KeyboardButton("🖼️ থাম্বনেইল গ্যালারি"), KeyboardButton("⏹️ লাইভ বন্ধ করুন")]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
@@ -314,19 +319,29 @@ async def show_video_selection_for_slot(update: Update, context: ContextTypes.DE
     videos = list_stock_videos()
     if not videos:
         text = (
-            "📁 **ভিডিও স্টক খালি!**\n\n"
+            f"📁 **[{slot.get('name', slot_id)}] ভিডিও স্টক খালি!**\n\n"
             "বর্তমানে কোনো ভিডিও নেই।\n"
-            "👉 আপনি চ্যাটে সরাসরি যেকোনো **ইউটিউব লিংক পেস্ট** করতে পারেন (yt-dlp দিয়ে অটো ডাউনলোড হবে) অথবা ভিডিও ফাইল সেন্ড করতে পারেন।"
+            "👉 আপনি চ্যাটে সরাসরি যেকোনো **গুগল ড্রাইভ লিংক** পাঠাতে পারেন (ফোল্ডারের সব .mp4 অটো ডাউনলোড হবে),\n"
+            "কিংবা **ইউটিউব লিংক পেস্ট** করতে পারেন অথবা সরাসরি ভিডিও ফাইল সেন্ড করতে পারেন।"
         )
-        keyboard = [[InlineKeyboardButton("🔙 ফিরে যান", callback_data="back_to_dashboard")]]
+        keyboard = [
+            [InlineKeyboardButton("🚗 ড্রাইভ থেকে ডাউনলোড", callback_data="prompt_drive_action")],
+            [InlineKeyboardButton("🔙 ফিরে যান", callback_data="back_to_dashboard")]
+        ]
         if is_callback and update.callback_query:
             await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
         else:
             await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
         return
 
-    text = f"🎬 **[{slot.get('name', slot_id)}] স্লটে চালানোর জন্য ভিডিও পছন্দ করুন:**\n\n"
+    text = (
+        f"🎬 **[{slot.get('name', slot_id)}] স্লটে ভিডিও পছন্দ করুন:**\n\n"
+        "👉 আপনি নিচের সব ভিডিও একসাথে একটানা ক্রমিক লুপে (24/7 Playlist Loop) চালাতে পারেন অথবা নির্দিষ্ট একটি ভিডিও নির্বাচন করতে পারেন:\n\n"
+    )
     buttons = []
+
+    # Option to loop ALL videos continuously
+    buttons.append([InlineKeyboardButton(f"🔄 সকল ভিডিও লুপে চালান ({len(videos)}টি ফাইল Playlist)", callback_data=f"slot_pl_{slot_id}")])
 
     for i, vid in enumerate(videos):
         text += f"**{i+1}.** 🎬 `{vid['name']}` ({vid['size_str']} | {vid['duration_str']})\n"
@@ -457,6 +472,66 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("start_slot_flow_"):
         slot_id = data.replace("start_slot_flow_", "")
         await show_video_selection_for_slot(update, context, slot_id, is_callback=True)
+
+    elif data == "prompt_drive_action":
+        await prompt_drive_download(update, context, is_callback=True)
+
+    elif data.startswith("slot_pl_"):
+        slot_id = data.replace("slot_pl_", "")
+        slot = get_slot(slot_id)
+        videos = list_stock_videos()
+        text = (
+            f"🔄 **স্লট:** `{slot.get('name', slot_id)}`\n"
+            f"📦 **মোড:** সকল ভিডিও ক্রমিক লুপ (24/7 Playlist Loop)\n"
+            f"📊 **ভিডিও সংখ্যা:** {len(videos)}টি .mp4 ফাইল\n\n"
+            "একটি ভিডিও শেষ হলে পরবর্তী ভিডিও চলবে এবং সব শেষ হলে স্বয়ংক্রিয়ভাবে প্রথম থেকে একটানা লুপ হতে থাকবে।\n\n"
+            "❓ **আপনি এটি কোন ফরম্যাটে লাইভ চালাতে চান?**"
+        )
+        keyboard = [
+            [InlineKeyboardButton("🖥️ লং ভিডিও (16:9 Landscape)", callback_data=f"run_pl_{slot_id}_long")],
+            [InlineKeyboardButton("📱 শর্টস ভিডিও (9:16 Vertical)", callback_data=f"run_pl_{slot_id}_shorts")],
+            [InlineKeyboardButton("🔙 ফিরে যান", callback_data=f"start_slot_flow_{slot_id}")]
+        ]
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+    elif data.startswith("run_pl_"):
+        parts = data.split("_")
+        slot_id = f"{parts[2]}_{parts[3]}"
+        mode = parts[4]
+
+        slot = get_slot(slot_id)
+        stream_key = slot.get("stream_key", "")
+
+        await query.edit_message_text(f"⏳ [{slot.get('name')}] সকল ভিডিও লুপে লাইভ শুরু হচ্ছে...")
+        success, msg = stream_manager.start_stream(PLAYLIST_LOOP_ALL, mode=mode, stream_key=stream_key, slot_id=slot_id)
+
+        if success:
+            api_note = ""
+            if is_youtube_api_authenticated():
+                title = slot.get("title", "")
+                desc = slot.get("description", "")
+                thumb = slot.get("thumbnail", "")
+                if title:
+                    update_live_broadcast_metadata(title, desc)
+                if thumb and Path(thumb).exists():
+                    update_live_broadcast_thumbnail(thumb)
+                api_note = "\n🌐 *ইউটিউব স্টুডিওতেও টাইটেল ও থাম্বনেইল সিঙ্ক করা হয়েছে।*\n"
+
+            await query.edit_message_text(
+                f"{msg}\n{api_note}\n📊 স্ট্যাটাস দেখতে নিচের বাটনে চাপুন:",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("📊 লাইভ ড্যাশবোর্ড", callback_data="refresh_dashboard")],
+                    [InlineKeyboardButton("⚙️ স্লট ম্যানেজার", callback_data="show_slot_manager")]
+                ]),
+                parse_mode="Markdown"
+            )
+        else:
+            await query.edit_message_text(
+                f"❌ লাইভ শুরু ব্যর্থ: {msg}",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 পুনরায় চেষ্টা করুন", callback_data=f"start_slot_flow_{slot_id}")]
+                ])
+            )
 
     elif data.startswith("slot_vid_"):
         parts = data.split("_")
@@ -642,6 +717,76 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="Markdown"
             )
 
+async def prompt_drive_download(update: Update, context: ContextTypes.DEFAULT_TYPE, is_callback: bool = False):
+    """Prompts user to send a Google Drive link."""
+    user = update.effective_user
+    if not is_admin(user.id):
+        return
+
+    context.user_data["waiting_for"] = "drive_url"
+    text = (
+        "🚗 **গুগল ড্রাইভ থেকে .mp4 ভিডিও ডাউনলোড ও ২৪/৭ লাইভ**\n\n"
+        "📥 আপনার গুগল ড্রাইভের **ফোল্ডার বা ফাইলের লিংকটি** এখানে লিখে পাঠান।\n\n"
+        "📌 **ফিচার ও সুবিধা:**\n"
+        "• ফোল্ডারে থাকা ৫০-৬০+ যতগুলো .mp4 ভিডিও থাকবে সব স্বয়ংক্রিয়ভাবে ডাউনলোড হয়ে লোকাল ভিডিও স্টকে জমা হবে।\n"
+        "• অন্য কোনো এক্সটেনশন (.txt, .jpg, .zip ইত্যাদি) বাদ দিয়ে শুধু .mp4 ভিডিওগুলোই সংরক্ষণ করা হবে।\n"
+        "• ডাউনলোড শেষ হওয়া মাত্রই এক ক্লিকে সবগুলো ভিডিও **২৪/৭ লুপ প্লেলিস্ট (24/7 Loop Playlist)** হিসেবে লাইভ চালাতে পারবেন!\n"
+        "• একটি ভিডিও শেষ হলে পরেরটি চলবে এবং সব শেষ হলে স্বয়ংক্রিয়ভাবে আবার ১ম ভিডিও থেকে চলতে থাকবে লুপে।\n\n"
+        "⚠️ **জরুরি বিষয়:** নিশ্চিত করুন ড্রাইভ ফোল্ডারের শেয়ার পারমিশন **'Anyone with the link can view'** করা আছে।"
+    )
+    keyboard = [[InlineKeyboardButton("🔙 ড্যাশবোর্ড", callback_data="back_to_dashboard")]]
+    if is_callback and update.callback_query:
+        await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    else:
+        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+async def handle_drive_download(update: Update, url: str):
+    """Downloads .mp4 video files from Google Drive link asynchronously."""
+    clean_url = extract_drive_url(url) or url
+    progress_msg = await update.message.reply_text(
+        f"📥 **গুগল ড্রাইভ লিংক শনাক্ত হয়েছে!**\n"
+        f"🔗 `{clean_url}`\n\n"
+        f"⏳ **ড্রাইভ থেকে .mp4 ভিডিওগুলো ডাউনলোড ও প্রসেসিং হচ্ছে...**\n"
+        f"_(ফাইল সংখ্যা ও ইন্টারনেটের গতির ওপর নির্ভর করে কিছুটা সময় লাগতে পারে)_",
+        parse_mode="Markdown"
+    )
+
+    loop = asyncio.get_running_loop()
+    success, res = await loop.run_in_executor(None, download_from_google_drive, clean_url)
+
+    if success:
+        count = res["count"]
+        size_str = res["total_size_str"]
+        files = res["files"]
+
+        file_preview = ""
+        for i, f in enumerate(files[:6]):
+            file_preview += f"• `{f['name']}` ({format_size(f['size'])})\n"
+        if count > 6:
+            file_preview += f"• _...আরও {count - 6}টি .mp4 ফাইল_\n"
+
+        keyboard = [
+            [InlineKeyboardButton("🔄 সব ভিডিও লুপে লাইভে চালান (24/7 Loop)", callback_data="select_live_slot_menu")],
+            [InlineKeyboardButton("📁 ভিডিও স্টক দেখুন", callback_data="list_stock_action")],
+            [InlineKeyboardButton("📊 লাইভ ড্যাশবোর্ড", callback_data="refresh_dashboard")]
+        ]
+
+        await progress_msg.edit_text(
+            f"✅ **ড্রাইভ থেকে সফলভাবে মোট {count}টি .mp4 ভিডিও ডাউনলোড ও সেভ হয়েছে!**\n\n"
+            f"📦 **মোট সাইজ:** `{size_str}`\n"
+            f"🎬 **ডাউনলোডকৃত ভিডিও তালিকা:**\n{file_preview}\n"
+            f"👉 আপনি এখন সরাসরি যেকোনো স্লটে এই ভিডিওগুলো ২৪/৭ লুপে লাইভ চালাতে পারেন।",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="Markdown"
+        )
+    else:
+        await progress_msg.edit_text(
+            f"❌ **ড্রাইভ ডাউনলোড ব্যর্থ হয়েছে!**\n\n"
+            f"কারণ: {res.get('error', 'অজানা ত্রুটি')}\n\n"
+            f"💡 নিশ্চিত করুন ফোল্ডার বা ফাইলের লিংকটির শেয়ার পারমিশন 'Anyone with the link can view' সেট করা আছে এবং এতে .mp4 ভিডিও আছে।",
+            parse_mode="Markdown"
+        )
+
 async def handle_url_download(update: Update, url: str):
     """Downloads video via yt-dlp asynchronously and offers instant live stream action."""
     progress_msg = await update.message.reply_text(
@@ -688,6 +833,12 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text("⛔ আপনি অনুমোদিত নন।")
         return
 
+    # Check if user sent a Google Drive URL
+    if is_drive_url(text):
+        url = extract_drive_url(text) or text
+        await handle_drive_download(update, url)
+        return
+
     # Check if user sent a video URL (YouTube, Shorts, etc.)
     if is_video_url(text) and not context.user_data.get("waiting_for"):
         url = extract_url(text)
@@ -698,6 +849,14 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
 
     if waiting_state:
         context.user_data.pop("waiting_for", None)
+
+        if waiting_state == "drive_url":
+            if is_drive_url(text):
+                url = extract_drive_url(text) or text
+                await handle_drive_download(update, url)
+            else:
+                await update.message.reply_text("❌ এটি গুগল ড্রাইভের লিংক নয়। অনুগ্রহ করে একটি সঠিক গুগল ড্রাইভ ফোল্ডার বা ফাইলের লিংক পাঠান।")
+            return
 
         if waiting_state == "set_node_name":
             set_node_id(text)
@@ -783,6 +942,9 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
 
     elif text == "📁 ভিডিও স্টক":
         await show_stock_videos(update, context)
+
+    elif text == "🚗 ড্রাইভ থেকে ডাউনলোড":
+        await prompt_drive_download(update, context)
 
     elif text == "⚙️ ইউটিউব ও স্লট সেটআপ":
         active_id = get_active_slot_id()
@@ -956,6 +1118,7 @@ def setup_telegram_bot() -> Application:
     app.add_handler(CommandHandler("dashboard", send_dashboard))
     app.add_handler(CommandHandler("slots", show_slot_manager))
     app.add_handler(CommandHandler("download", download_command))
+    app.add_handler(CommandHandler("drive", prompt_drive_download))
 
     app.add_handler(CallbackQueryHandler(handle_callback))
 
