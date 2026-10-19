@@ -61,7 +61,10 @@ from yt_downloader import (
 from drive_downloader import (
     is_drive_url,
     extract_drive_url,
-    download_from_google_drive
+    is_folder_url,
+    scan_google_drive_folder,
+    download_drive_batch,
+    download_single_drive_file
 )
 
 # Setup Logger
@@ -533,6 +536,69 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ])
             )
 
+    elif data.startswith("dldrive_"):
+        count_str = data.replace("dldrive_", "")
+        max_count = int(count_str) if count_str.isdigit() else None
+
+        mp4_files = context.bot_data.get("pending_drive_files", [])
+        if not mp4_files:
+            await query.edit_message_text("⚠️ ড্রাইভ ফাইল তালিকা পাওয়া যায়নি। দয়া করে লিংকটি পুনরায় চ্যাটে সেন্ড করুন।")
+            return
+
+        total_target = min(len(mp4_files), max_count) if max_count else len(mp4_files)
+
+        status_msg = await query.edit_message_text(
+            f"⏳ **গুগল ড্রাইভ থেকে .mp4 ভিডিও ডাউনলোড শুরু হচ্ছে...**\n"
+            f"🎯 লক্ষ্য: `{total_target}`টি ভিডিও\n\n"
+            f"📊 প্রগ্রেস শীঘ্রই আপডেট হবে...",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📊 লাইভ ড্যাশবোর্ড", callback_data="refresh_dashboard")]
+            ]),
+            parse_mode="Markdown"
+        )
+
+        last_update_time = [0.0]
+        loop = asyncio.get_running_loop()
+
+        def on_progress(p):
+            curr_time = time.time()
+            if curr_time - last_update_time[0] >= 3.0 or p["current"] == p["target"]:
+                last_update_time[0] = curr_time
+                percent = int((p["current"] / p["target"]) * 100)
+                text = (
+                    f"⏳ **গুগল ড্রাইভ থেকে .mp4 ভিডিও ডাউনলোড হচ্ছে...**\n\n"
+                    f"📊 **অগ্রগতি:** `[{p['current']}/{p['target']}]` ({percent}%)\n"
+                    f"📦 **মোট সাইজ:** `{p['size_str']}`\n"
+                    f"🎬 **সর্বশেষ সেভ:** `{p['latest_file'][:35]}`\n\n"
+                    f"💡 **টিপস:** ভিডিওগুলো সরাসরি স্টকে জমা হচ্ছে। আপনি যেকোনো সময় লাইভ চালু করতে পারেন!"
+                )
+                kb = [
+                    [InlineKeyboardButton("🚀 এখনই লাইভ চালান", callback_data="select_live_slot_menu")],
+                    [InlineKeyboardButton("📁 ভিডিও স্টক", callback_data="list_stock_action")]
+                ]
+                asyncio.run_coroutine_threadsafe(
+                    status_msg.edit_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown"),
+                    loop
+                )
+
+        success, res = await loop.run_in_executor(None, download_drive_batch, mp4_files, max_count, on_progress)
+
+        if success:
+            kb = [
+                [InlineKeyboardButton("🔄 সব ভিডিও লুপে লাইভে চালান (24/7 Loop)", callback_data="select_live_slot_menu")],
+                [InlineKeyboardButton("📁 ভিডিও স্টক দেখুন", callback_data="list_stock_action")],
+                [InlineKeyboardButton("📊 লাইভ ড্যাশবোর্ড", callback_data="refresh_dashboard")]
+            ]
+            await status_msg.edit_text(
+                f"✅ **ড্রাইভ থেকে মোট {res['count']}টি .mp4 ভিডিও সফলভাবে ডাউনলোড ও সেভ হয়েছে!**\n\n"
+                f"📦 **মোট সাইজ:** `{res['total_size_str']}`\n\n"
+                f"👉 এখন আপনি যেকোনো স্লটে এই সবগুলো ভিডিও একটানা লুপে ২৪/৭ লাইভ চালাতে পারেন।",
+                reply_markup=InlineKeyboardMarkup(kb),
+                parse_mode="Markdown"
+            )
+        else:
+            await status_msg.edit_text(f"❌ ডাউনলোড ব্যর্থ: {res.get('error', 'অজানা ত্রুটি')}")
+
     elif data.startswith("slot_vid_"):
         parts = data.split("_")
         slot_id = f"{parts[2]}_{parts[3]}"
@@ -740,52 +806,79 @@ async def prompt_drive_download(update: Update, context: ContextTypes.DEFAULT_TY
     else:
         await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
-async def handle_drive_download(update: Update, url: str):
-    """Downloads .mp4 video files from Google Drive link asynchronously."""
+async def handle_drive_download(update: Update, context: ContextTypes.DEFAULT_TYPE, url: str):
+    """Handles Google Drive links: scans folder and offers batch options, or downloads file."""
     clean_url = extract_drive_url(url) or url
+
+    if not is_folder_url(clean_url):
+        progress_msg = await update.message.reply_text(
+            f"📥 **গুগল ড্রাইভ ফাইল লিংক শনাক্ত হয়েছে!**\n🔗 `{clean_url}`\n\n⏳ **ভিডিওটি ডাউনলোড হচ্ছে...**",
+            parse_mode="Markdown"
+        )
+        loop = asyncio.get_running_loop()
+        success, res = await loop.run_in_executor(None, download_single_drive_file, clean_url)
+        if success:
+            keyboard = [
+                [InlineKeyboardButton("🚀 সরাসরি লাইভে চালান", callback_data="select_live_slot_menu")],
+                [InlineKeyboardButton("📁 ভিডিও স্টক দেখুন", callback_data="list_stock_action")],
+                [InlineKeyboardButton("📊 লাইভ ড্যাশবোর্ড", callback_data="refresh_dashboard")]
+            ]
+            await progress_msg.edit_text(
+                f"✅ **ড্রাইভ থেকে ভিডিও সফলভাবে ডাউনলোড ও সেভ হয়েছে!**\n\n"
+                f"🎬 **ফাইল:** `{res['files'][0]['name']}`\n"
+                f"📦 **সাইজ:** `{res['total_size_str']}`\n\n"
+                "👉 এখন আপনি যেকোনো স্লটে এই ভিডিওটি ২৪/৭ লাইভ চালাতে পারেন।",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode="Markdown"
+            )
+        else:
+            await progress_msg.edit_text(f"❌ **ড্রাইভ ডাউনলোড ব্যর্থ:** {res.get('error', 'অজানা ত্রুটি')}")
+        return
+
     progress_msg = await update.message.reply_text(
-        f"📥 **গুগল ড্রাইভ লিংক শনাক্ত হয়েছে!**\n"
+        f"🔍 **গুগল ড্রাইভ ফোল্ডার স্ক্যান করা হচ্ছে...**\n"
         f"🔗 `{clean_url}`\n\n"
-        f"⏳ **ড্রাইভ থেকে .mp4 ভিডিওগুলো ডাউনলোড ও প্রসেসিং হচ্ছে...**\n"
-        f"_(ফাইল সংখ্যা ও ইন্টারনেটের গতির ওপর নির্ভর করে কিছুটা সময় লাগতে পারে)_",
+        f"⏳ _ফোল্ডারের ফাইল তালিকা খোঁজা হচ্ছে (কয়েক সেকেন্ড সময় লাগবে)..._",
         parse_mode="Markdown"
     )
 
     loop = asyncio.get_running_loop()
-    success, res = await loop.run_in_executor(None, download_from_google_drive, clean_url)
+    success, res = await loop.run_in_executor(None, scan_google_drive_folder, clean_url)
 
-    if success:
-        count = res["count"]
-        size_str = res["total_size_str"]
-        files = res["files"]
-
-        file_preview = ""
-        for i, f in enumerate(files[:6]):
-            file_preview += f"• `{f['name']}` ({format_size(f['size'])})\n"
-        if count > 6:
-            file_preview += f"• _...আরও {count - 6}টি .mp4 ফাইল_\n"
-
-        keyboard = [
-            [InlineKeyboardButton("🔄 সব ভিডিও লুপে লাইভে চালান (24/7 Loop)", callback_data="select_live_slot_menu")],
-            [InlineKeyboardButton("📁 ভিডিও স্টক দেখুন", callback_data="list_stock_action")],
-            [InlineKeyboardButton("📊 লাইভ ড্যাশবোর্ড", callback_data="refresh_dashboard")]
-        ]
-
+    if not success:
         await progress_msg.edit_text(
-            f"✅ **ড্রাইভ থেকে সফলভাবে মোট {count}টি .mp4 ভিডিও ডাউনলোড ও সেভ হয়েছে!**\n\n"
-            f"📦 **মোট সাইজ:** `{size_str}`\n"
-            f"🎬 **ডাউনলোডকৃত ভিডিও তালিকা:**\n{file_preview}\n"
-            f"👉 আপনি এখন সরাসরি যেকোনো স্লটে এই ভিডিওগুলো ২৪/৭ লুপে লাইভ চালাতে পারেন।",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode="Markdown"
-        )
-    else:
-        await progress_msg.edit_text(
-            f"❌ **ড্রাইভ ডাউনলোড ব্যর্থ হয়েছে!**\n\n"
+            f"❌ **ড্রাইভ স্ক্যান ব্যর্থ হয়েছে!**\n\n"
             f"কারণ: {res.get('error', 'অজানা ত্রুটি')}\n\n"
-            f"💡 নিশ্চিত করুন ফোল্ডার বা ফাইলের লিংকটির শেয়ার পারমিশন 'Anyone with the link can view' সেট করা আছে এবং এতে .mp4 ভিডিও আছে।",
+            f"💡 নিশ্চিত করুন ফোল্ডারটির শেয়ার পারমিশন 'Anyone with the link can view' সেট করা আছে।",
             parse_mode="Markdown"
         )
+        return
+
+    mp4_count = res["mp4_count"]
+    total_files = res["total_files"]
+    mp4_files = res["mp4_files"]
+
+    context.bot_data["pending_drive_files"] = mp4_files
+
+    buttons = []
+    if mp4_count > 30:
+        buttons.append([InlineKeyboardButton("📥 প্রথম ৩০টি ভিডিও (দ্রুত লাইভ শুরু)", callback_data="dldrive_30")])
+    if mp4_count > 60:
+        buttons.append([InlineKeyboardButton("📥 প্রথম ৬০টি ভিডিও (প্রস্তাবিত স্টক)", callback_data="dldrive_60")])
+    if mp4_count > 100:
+        buttons.append([InlineKeyboardButton("📥 প্রথম ১০০টি ভিডিও", callback_data="dldrive_100")])
+    buttons.append([InlineKeyboardButton(f"📥 সমস্ত {mp4_count}টি ভিডিও ডাউনলোড", callback_data=f"dldrive_{mp4_count}")])
+    buttons.append([InlineKeyboardButton("❌ বাতিল", callback_data="back_to_dashboard")])
+
+    await progress_msg.edit_text(
+        f"📁 **গুগল ড্রাইভ ফোল্ডার স্ক্যান সফল!**\n\n"
+        f"🎬 **মোট .mp4 ভিডিও পাওয়া গেছে:** `{mp4_count}টি`\n"
+        f"📦 **ফোল্ডারে মোট ফাইল:** `{total_files}টি`\n\n"
+        f"👉 **আপনি কয়টি ভিডিও ডাউনলোড করতে চান?**\n"
+        f"_(ভিডিওগুলো সরাসরি স্টকে যুক্ত হতে থাকবে এবং ডাউনলোড চলাকালীনই আপনি লাইভ চালু করতে পারবেন)_",
+        reply_markup=InlineKeyboardMarkup(buttons),
+        parse_mode="Markdown"
+    )
 
 async def handle_url_download(update: Update, url: str):
     """Downloads video via yt-dlp asynchronously and offers instant live stream action."""
@@ -836,7 +929,7 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
     # Check if user sent a Google Drive URL
     if is_drive_url(text):
         url = extract_drive_url(text) or text
-        await handle_drive_download(update, url)
+        await handle_drive_download(update, context, url)
         return
 
     # Check if user sent a video URL (YouTube, Shorts, etc.)
@@ -853,7 +946,7 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
         if waiting_state == "drive_url":
             if is_drive_url(text):
                 url = extract_drive_url(text) or text
-                await handle_drive_download(update, url)
+                await handle_drive_download(update, context, url)
             else:
                 await update.message.reply_text("❌ এটি গুগল ড্রাইভের লিংক নয়। অনুগ্রহ করে একটি সঠিক গুগল ড্রাইভ ফোল্ডার বা ফাইলের লিংক পাঠান।")
             return

@@ -48,123 +48,146 @@ def sanitize_filename(name: str) -> str:
     clean = re.sub(r'[\u200e\u200f\u202a-\u202e]', '', name)
     return re.sub(r'[\\/*?:"<>|]', "", clean).strip()
 
-def download_from_google_drive(url: str, progress_callback=None) -> tuple[bool, dict]:
+def scan_google_drive_folder(url: str) -> tuple[bool, dict]:
     """
-    Downloads .mp4 video files from a Google Drive folder or single file link into VIDEOS_DIR.
-    Filters exclusively for .mp4 files as requested.
+    Quickly scans a Google Drive folder without downloading content.
     Returns: (success: bool, info_dict: dict)
     """
-    VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
-    temp_download_dir = BASE_DIR / "temp_drive_downloads"
-    if temp_download_dir.exists():
-        shutil.rmtree(temp_download_dir, ignore_errors=True)
-    temp_download_dir.mkdir(parents=True, exist_ok=True)
-
-    downloaded_files = []
-    total_bytes = 0
-
+    clean_url = extract_drive_url(url) or url
     try:
-        clean_url = extract_drive_url(url) or url
-
-        if is_folder_url(clean_url):
-            logger.info(f"Downloading Google Drive folder: {clean_url}")
-            # Download folder to temporary staging area
-            results = gdown.download_folder(
-                url=clean_url,
-                output=str(temp_download_dir),
-                quiet=True,
-                use_cookies=False,
-                remaining_ok=True
-            )
-
-            # Search temp_download_dir recursively for all .mp4 files
-            for root, _, files in os.walk(temp_download_dir):
-                for f in files:
-                    ext = Path(f).suffix.lower()
-                    if ext == ".mp4":
-                        src_path = Path(root) / f
-                        clean_name = sanitize_filename(src_path.name)
-                        if not clean_name.lower().endswith(".mp4"):
-                            clean_name += ".mp4"
-
-                        dest_path = VIDEOS_DIR / clean_name
-                        # Handle duplicate filenames
-                        counter = 1
-                        while dest_path.exists():
-                            stem = Path(clean_name).stem
-                            dest_path = VIDEOS_DIR / f"{stem}_{counter}.mp4"
-                            counter += 1
-
-                        file_size = src_path.stat().st_size
-                        shutil.move(str(src_path), str(dest_path))
-                        downloaded_files.append({
-                            "name": dest_path.name,
-                            "path": str(dest_path),
-                            "size": file_size
-                        })
-                        total_bytes += file_size
-
-        else:
-            logger.info(f"Downloading single Google Drive file: {clean_url}")
-            output_file = gdown.download(
-                url=clean_url,
-                output=str(temp_download_dir) + os.sep,
-                quiet=True,
-                fuzzy=True
-            )
-
-            if output_file and Path(output_file).exists():
-                src_path = Path(output_file)
-                ext = src_path.suffix.lower()
-                if ext != ".mp4":
-                    # If file has no extension but is mp4, or user wants mp4 only
-                    if not ext:
-                        clean_name = sanitize_filename(src_path.name) + ".mp4"
-                    else:
-                        shutil.rmtree(temp_download_dir, ignore_errors=True)
-                        return False, {
-                            "error": f"ফাইলটি .mp4 ফরম্যাট নয় (ফরম্যাট: {ext})। শুধু .mp4 ভিডিও ডাউনলোড করা হবে।"
-                        }
-                else:
-                    clean_name = sanitize_filename(src_path.name)
-
-                dest_path = VIDEOS_DIR / clean_name
-                counter = 1
-                while dest_path.exists():
-                    stem = Path(clean_name).stem
-                    dest_path = VIDEOS_DIR / f"{stem}_{counter}.mp4"
-                    counter += 1
-
-                file_size = src_path.stat().st_size
-                shutil.move(str(src_path), str(dest_path))
-                downloaded_files.append({
-                    "name": dest_path.name,
-                    "path": str(dest_path),
-                    "size": file_size
-                })
-                total_bytes += file_size
-
-        # Cleanup temp directory
-        shutil.rmtree(temp_download_dir, ignore_errors=True)
-
-        if not downloaded_files:
+        logger.info(f"Scanning Google Drive folder: {clean_url}")
+        files = gdown.download_folder(url=clean_url, skip_download=True, use_cookies=False)
+        if not files:
             return False, {
-                "error": "ড্রাইভ লিংক থেকে কোনো .mp4 ভিডিও পাওয়া যায়নি। অনুগ্রহ করে নিশ্চিত করুন ফোল্ডারে .mp4 ভিডিও আছে এবং লিংকটি 'Anyone with the link can view' করা আছে।"
+                "error": "ড্রাইভ ফোল্ডারে কোনো ফাইল পাওয়া যায়নি অথবা অ্যাক্সেস পারমিশন নেই।"
+            }
+
+        mp4_files = []
+        for f in files:
+            fname = Path(f.path).name
+            if fname.lower().endswith(".mp4"):
+                mp4_files.append({
+                    "id": f.id,
+                    "name": fname,
+                    "rel_path": f.path
+                })
+
+        if not mp4_files:
+            return False, {
+                "error": f"ফোল্ডারে মোট {len(files)}টি ফাইল পাওয়া গেছে, কিন্তু কোনো .mp4 ভিডিও পাওয়া যায়নি।"
             }
 
         return True, {
-            "count": len(downloaded_files),
-            "files": downloaded_files,
-            "total_size": total_bytes,
-            "total_size_str": format_size(total_bytes)
+            "total_files": len(files),
+            "mp4_count": len(mp4_files),
+            "mp4_files": mp4_files,
+            "url": clean_url
         }
-
     except Exception as e:
-        shutil.rmtree(temp_download_dir, ignore_errors=True)
         err_msg = str(e)
-        logger.error(f"Google Drive download error: {err_msg}")
-        if "Cannot retrieve" in err_msg or "Permission denied" in err_msg:
-            return False, {
-                "error": "ড্রাইভ ফাইল অ্যাক্সেস করা যায়নি। অনুগ্রহ করে নিশ্চিত করুন গুগল ড্রাইভে লিংকটির পারমিশন 'Anyone with the link' (Viewer) সেট করা আছে।"
-            }
-        return False, {"error": f"ড্রাইভ ডাউনলোড ত্রুটি: {err_msg[:150]}"}
+        logger.error(f"Error scanning Drive folder: {err_msg}")
+        return False, {"error": f"ড্রাইভ স্ক্যান ত্রুটি: {err_msg[:120]}"}
+
+def download_drive_batch(mp4_files: list[dict], max_count: int | None = None, progress_callback=None) -> tuple[bool, dict]:
+    """
+    Downloads .mp4 files file-by-file directly into VIDEOS_DIR.
+    Provides incremental saving and real-time progress.
+    """
+    VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
+
+    target_files = mp4_files[:max_count] if max_count else mp4_files
+    total_target = len(target_files)
+
+    downloaded = []
+    total_bytes = 0
+
+    for i, item in enumerate(target_files):
+        file_id = item["id"]
+        raw_name = item["name"]
+        clean_name = sanitize_filename(raw_name)
+        if not clean_name.lower().endswith(".mp4"):
+            clean_name += ".mp4"
+
+        dest_path = VIDEOS_DIR / clean_name
+
+        # If file already exists and has content, skip redownload
+        if dest_path.exists() and dest_path.stat().st_size > 1024:
+            fsize = dest_path.stat().st_size
+            downloaded.append({"name": dest_path.name, "path": str(dest_path), "size": fsize})
+            total_bytes += fsize
+        else:
+            try:
+                temp_file = dest_path.with_suffix(".downloading")
+                res = gdown.download(id=file_id, output=str(temp_file), quiet=True)
+                if res and Path(res).exists():
+                    fsize = Path(res).stat().st_size
+                    if fsize > 1024:
+                        if dest_path.exists():
+                            dest_path.unlink()
+                        Path(res).rename(dest_path)
+                        downloaded.append({"name": dest_path.name, "path": str(dest_path), "size": fsize})
+                        total_bytes += fsize
+                    else:
+                        Path(res).unlink(missing_ok=True)
+            except Exception as e:
+                logger.warning(f"Failed to download file {clean_name} ({file_id}): {e}")
+
+        # Trigger progress callback
+        if progress_callback:
+            try:
+                progress_callback({
+                    "current": i + 1,
+                    "target": total_target,
+                    "total_available": len(mp4_files),
+                    "latest_file": clean_name,
+                    "downloaded_count": len(downloaded),
+                    "total_bytes": total_bytes,
+                    "size_str": format_size(total_bytes)
+                })
+            except Exception:
+                pass
+
+    if not downloaded:
+        return False, {"error": "একটিও .mp4 ভিডিও ডাউনলোড সম্পন্ন করা যায়নি।"}
+
+    return True, {
+        "count": len(downloaded),
+        "total_size": total_bytes,
+        "total_size_str": format_size(total_bytes),
+        "files": downloaded
+    }
+
+def download_single_drive_file(url: str) -> tuple[bool, dict]:
+    """Downloads a single Google Drive file link directly into VIDEOS_DIR."""
+    VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
+    clean_url = extract_drive_url(url) or url
+
+    temp_staging = BASE_DIR / "temp_single.mp4"
+    try:
+        output_file = gdown.download(url=clean_url, output=str(temp_staging), quiet=True, fuzzy=True)
+        if not output_file or not Path(output_file).exists():
+            return False, {"error": "ফাইলটি ডাউনলোড করা যায়নি। লিংকটির পারমিশন চেক করুন।"}
+
+        src_path = Path(output_file)
+        clean_name = sanitize_filename(src_path.name)
+        if not clean_name.lower().endswith(".mp4"):
+            clean_name += ".mp4"
+
+        dest_path = VIDEOS_DIR / clean_name
+        counter = 1
+        while dest_path.exists():
+            stem = Path(clean_name).stem
+            dest_path = VIDEOS_DIR / f"{stem}_{counter}.mp4"
+            counter += 1
+
+        fsize = src_path.stat().st_size
+        shutil.move(str(src_path), str(dest_path))
+
+        return True, {
+            "count": 1,
+            "total_size": fsize,
+            "total_size_str": format_size(fsize),
+            "files": [{"name": dest_path.name, "path": str(dest_path), "size": fsize}]
+        }
+    except Exception as e:
+        return False, {"error": f"ডাউনলোড ত্রুটি: {str(e)[:120]}"}
